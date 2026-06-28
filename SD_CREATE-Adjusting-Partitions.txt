@@ -1,0 +1,128 @@
+UGreen Model DXP4800 Plus
+Notes on how to make a bootable SD card for UGreen DXP4800 Plus
+This shows how to create and modify individual partitions.
+
+Identify the SD card device:
+
+	lsblk -f
+
+Assuming the SD card device is /dev/sdl
+
+Erase all available signatures from the SD card:
+
+	wipefs -a /dev/sdl
+
+Create a new gpt partition table:
+
+	parted /dev/sdl mklabel gpt
+
+Tell the OS that the partition table has changed:
+
+	partprobe /dev/sdl
+
+Identify the NVMe boot device.
+Look for labels such as kernel, factory, UGREEN-SERVICE, and USER-DATA:
+
+	lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT
+	
+Assuming the NVMe device is /dev/nvme2n1
+
+Copy the boot NVMe partition table to the SD card:
+
+	sfdisk -d /dev/nvme2n1 | sfdisk /dev/sdl
+
+Tell the OS that the partition table has changed:
+
+	partprobe /dev/sdl
+
+The partitions on the NVMe and SD card should match:
+
+	fdisk -l /dev/nvme2n1 /dev/sdl
+
+If the SD card is larger, you will need to run 'parted'
+to regain the additional space:
+
+	parted --script --fix /dev/sdl
+
+Take note of the LABEL, UUID, PARTUUID of partition 1 and partition 128:
+
+	lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT
+
+CRITICAL: The PARTUUID of /dev/sdl1   (SD card) must be the same as /dev/nvme2n1p1   (UGreen Boot NVMe)
+CRITICAL: The PARTUUID of /dev/sdl128 (SD card) must be the same as /dev/nvme2n1p128 (UGreen Boot NVMe)
+If either PARTUUID is not the same, the SD card will not be recognized by grub.
+Many confuse UUID and PARTUUID. The UUID CAN be different but the PARTUUID cannot be different.
+
+Create sdl1 filesystem with optional LABEL="kernel"
+A label is not needed to boot:
+
+	mkfs.vfat -F16 -n kernel /dev/sdl1
+
+Create or change the UUID of the vfat partition 1
+CRITICAL: This UUID must be unique to the system or you will not be able to boot from the SD card.
+As devices are brought up, device enumeration will change for one boot to another. To boot from a 
+specific device, we will not use the duplicate PARTUUID we are forced to use, but use the unique 
+UUID=12345678 instead by modifying /boot/EFI/debian/grub.cfg on the SD card:
+
+	mlabel -N 12345678 -i /dev/sdl1
+
+Since this is a vfat partition, the UUID is now 1234-5678 not 12345678
+
+Create or change the PARTUUID of the vfat partition 1
+CRITICAL: The PARTUUID of /dev/sdl1   (SD card) must be the same as /dev/nvme2n1p1   (UGreen Boot NVMe)
+Using fdisk: (use the disk sdl, not the partition sdl1)
+
+	fdisk /dev/sdl
+	x
+	u
+	1    <---- partition 1
+	xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa01
+	r
+	w
+
+Partitions 2, 3, 4, 6, 7 are the same, however you should make the UUID and PARTUUID unique
+To get a unique ID run:
+
+	uuidgen
+
+Example: (UGreen only supports ext4 file system during boot)
+
+	mkfs.ext4 /dev/sdl2
+
+Change UUID:
+
+	uuidgen
+
+Output from uuidgen is: 6918b9f0-e1e4-4f64-8e85-af2a091cb626
+
+	tune2fs -U 6918b9f0-e1e4-4f64-8e85-af2a091cb626 /dev/sdl2
+
+Change PARTUUID:
+
+	uuidgen
+
+Output from uuidgen is: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+	fdisk /dev/sdl
+	x
+	u
+	2    <---- this time partition 2
+	xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	r
+	w
+
+Partition 5 is the swap partition. It is not required
+but available for use. LABEL=sdswap is useful to easily identify if 
+the booted system is using the SD card swap or the NVMe swap:
+
+	mkswap -L sdswap /dev/sdl5
+
+Use 'lsblk -f' to get the swap UUID.
+You will need to add:
+
+	UUID="b7ab3610-cd84-45c9-a061-6e544e5ce8f6"  none  swap  sw  0 0
+
+To the SD cards /dev/sdl7/etc/fstab to use the SD card swap partition.
+
+Copy the NVMe data to the new file systems using rsync, ddrescue, etc.
+
