@@ -1,0 +1,386 @@
+UGreen Model DXP4800 Plus
+Create a SD card to unlock the AMI BIOS
+
+Noteable benifits:
+
+This will allow you to turn off the watchdog timer so
+the system will not reboot when you install a different
+operating system.
+
+It will allow you to adjust the cpu fan and case fan
+profiles. Disable the UGREEN splash graphic.
+
+To get access to the UGREEN AMI BIOS you need to create
+a SD card with these features:
+
+1. Is recognized by the BIOS as bootable
+2. Missing important boot files needed to boot
+
+Synopsis:
+	use sfdisk to copy NVMe partition table to file
+	edit file to point to SD card device
+   use sfdisk to copy file to SD card
+	use ddrescue to copy NVMe partition 128 to SD card
+	use ddrescue to copy NVMe partition 1 to SD card
+	mount sd card
+	delete all files in /EFI/debian on the SD card
+	except grub.cfg
+	reboot ... BIOS now shows on screen
+
+Short description of how to do this. In order for the
+BIOS to recognize the SD card as bootable, it needs the
+split GRUB partition p128. The PARTUUID must also be the
+same as the PARTUUID of the boot NVMe. A simple way to do 
+this is to use ddrescue to copy partition p128 to the 
+SD card.
+
+Next it needs a boot partition p1. The PARTUUID of the
+SD card must match the PARTUUID of the NVMe boot partition.
+The easiest way to do this is to use ddrescue to copy p1
+of the NVMe to the SD card.
+
+These two partitions with matching PARTUUID's will let the
+BIOS recognize the SD card as bootable.
+
+Remove important files needed to boot. The only file on
+partition 1 in /EFI/debian we keep is grub.cfg.
+Remove the following files:
+
+	BOOTX64.CFG
+	fbx64.efi
+	grub.am
+	grubx64.efi
+	mmx64.efi
+	shimx64.efi
+
+These are need to successfully boot. Since they are missing 
+you will be kicked back to the AMI BIOS.
+
+=============================================================
+
+I was creating the docuemnt below on how to create a bootable 
+Debian bookworm SD card when I stumbled upon this feature. 
+Having access to the BIOS made this procedure unnecessary now.
+I normally boot UGreen-kernel -> kexec Bookworm-kernel
+I leave it here as a reference.
+
+
+SD card size = NVMe size = 128GB
+
+Identify the SD card device and the boot NVMe:
+
+	lsblk -f
+
+We will assume the SD card device is /dev/sdl and
+the NVMe device is /dev/nvme2n1
+
+Erase all available signatures from the SD card:
+
+	wipefs -a /dev/sdl
+
+sturner@ugreen:~# wipefs -a /dev/sdl
+/dev/sdl: 8 bytes were erased at offset 0x00000200 (gpt): 45 46 49 20 50 41 52 54
+/dev/sdl: 8 bytes were erased at offset 0x1dcd5ffe00 (gpt): 45 46 49 20 50 41 52 54
+/dev/sdl: 2 bytes were erased at offset 0x000001fe (PMBR): 55 aa
+/dev/sdl: calling ioctl to re-read partition table: Success
+
+Since this NVMe is 128GB and the SD card is 128GB we are assured
+there will be enough space.
+
+Use fdisk to find out how many sectors are on the SD card:
+
+	fdisk -l /dev/sdl
+
+sturner@ugreen:~# fdisk -l /dev/sdl
+Disk /dev/sdl: 119.21 GiB, 127999672320 bytes, 249999360 sectors
+Disk model: MassStorageClass
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+
+Total sectors=249999360
+
+Get the partition table information from the boot NVMe:
+
+	sfdisk -d /dev/nvme2n1 > nvme2n1_table.txt
+
+sturner@ugreen:~# cat nvme2n1_table.txt 
+label: gpt
+label-id: xxxxxxxx-xxxx-xxxx-xxxx-993BFB698A00
+device: /dev/nvme2n1
+unit: sectors
+first-lba: 34
+last-lba: 250069646
+sector-size: 512
+
+/dev/nvme2n1p1 : start=         512, size=      524288, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA01, attrs="LegacyBIOSBootable"
+/dev/nvme2n1p2 : start=      524800, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA02
+/dev/nvme2n1p3 : start=     4720640, size=       20480, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx0F4
+/dev/nvme2n1p4 : start=     4741120, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx041
+/dev/nvme2n1p5 : start=     8935424, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx050
+/dev/nvme2n1p6 : start=    13129728, size=     8388608, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA52
+/dev/nvme2n1p7 : start=    21518336, size=   228551311, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx9DA
+/dev/nvme2n1p128 : start=          34, size=         478, type=21686148-6449-6E6F-744E-656564454649, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA80
+
+The partition table displayed is not in the actual order, but is in alphabetical order.
+The first partition is p128 but we will call it p128. It starts at sector 34 and is 478 sectors.
+34 + 478 = 512. The p1 partition (second on disk) starts at 512. The math checks out.
+Above it says the last-lba is 250069646. Take note of this.
+
+NOTE:
+When it shows uuid= this is actually PARTUUID and not UUID. This is a
+partitioning tool so the PARTUUID is implied. Don't confuse the two.
+
+Notice that the PARTUUID (uuid here) for partition 1 2 and 128 are very similar.
+They are exactly the same except for the last 3 digits.
+
+If you run fdisk -l /dev/nvme2n1 it shows:
+
+sturner@ugreen:~# fdisk -l /dev/nvme2n1
+Disk /dev/nvme2n1: 119.24 GiB, 128035676160 bytes, 250069680 sectors
+Disk model: YSO128GTLCW-E3C-2                       
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: gpt
+Disk identifier: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA00
+
+Device              Start       End   Sectors  Size Type
+/dev/nvme2n1p1        512    524799    524288  256M Linux filesystem
+/dev/nvme2n1p2     524800   4719103   4194304    2G Linux filesystem
+/dev/nvme2n1p3    4720640   4741119     20480   10M Linux filesystem
+/dev/nvme2n1p4    4741120   8935423   4194304    2G Linux filesystem
+/dev/nvme2n1p5    8935424  13129727   4194304    2G Linux filesystem
+/dev/nvme2n1p6   13129728  21518335   8388608    4G Linux filesystem
+/dev/nvme2n1p7   21518336 250069646 228551311  109G Linux filesystem
+/dev/nvme2n1p128       34       511       478  239K BIOS boot
+
+Partition table entries are not in disk order.
+
+But fdisk shows 250069680 sectors? Remember that p128 didn't start until
+sector 34. Sector 0 through 33 is for the partition table. So when it says
+the last-lba=250069646 and we add 34 sectors, we get 250069680. We will 
+need to do this math to create the SD partitions.
+
+This partition table file is going to be used to create the partitions
+on the SD card. Copy the file to a new file so we can edit it:
+
+	cp nvme2n1_table.txt sdl_table.txt
+
+DO THIS NOW! edit sdl_table.txt and change the device: /dev/nvme2n1
+to be /dev/sdl Also change the partition table entries that start with
+/dev/nvme2n1p??? to be /dev/sdl??? You don't want to trash the NVMe.
+If you forget and load this file you will distroy your boot NVMe.
+
+First we need a plan. The SD card will be as follows:
+
+	p128 = split GRUB partition
+	p1   = boot vfat partition containing two version of bookworm
+	p2   = swap (Not really needed on the NAS)
+	p3   = Debian Bookworm
+
+Partiton p128 and p1 are required for the SD card to be recognized by
+the UGreen BIOS. More on that later.
+
+The partition table starts at 0 and is 34 sectors, meaning it
+goes from 0 to 33 which is 34 sectors because we start counting
+at zero and not 1. So since the partition table goes from 0 to 33
+then the next partition, p128 must start at 34. Or another way, 
+0 + 34 = 34. The next partition must start at 34.
+
+p128 is easy. It is already complete in the sdl_table.txt file.
+p128 starts at 34 and is 478 sectors. 34 + 478 = 512 The next partition
+must start at 512.
+
+p1 is also easy as it is 256MB in size; more than enough to hold
+two operating system boot files. So p1 is done as well. p1 starts
+at 512 + 524288 = 524800. The next partition must start at 524800.
+
+p2 is the swap file. I am not going to use swap as it will actually
+slow the system down, but it is nice to have if you are going to run
+many programs and not be just a file server. Future proofing.
+
+p2 details:
+
+2GB is 2147483648 bytes
+fdisk for the sd card showed a sector size of 512 bytes
+
+2147483648/512=4194304 sectors needed for 2GB
+
+p2 start is good at 524800. Now we add 4194304 sectors to it and
+get 4719104. p3 then must start at 4719104.
+
+We need to know the size of p3, so lets work backwards.
+
+From the fdisk -l of the sd card the total number of sectors is
+249999360 minus the partition table, with is 34 and we get:
+
+249999360-34=249999326 this is the last-lba. We need to change:
+
+last-lba: 250069646 to be last-lba: 249999326
+
+Remember, the last-lba in the file is for the NVMe, we have
+a SD card. Allocation space is a little different on different
+media.
+
+If we know p3 starts at 4719104 and ends at 249999326 but we
+don't know the size, we have:
+
+4719104 + x = 249999326
+x=4194304
+
+Math check:
+Reserved start=0      + Reserved size=34        = 34
+   p128 start=34      +     p128 size=478       = 512
+     p1 start=512     +       p1 size=524288    = 524800
+     p2 start=524800  +       p2 size=4194304   = 4719104
+     p3 start=4719104 +       p3 size=245280222 = 249999326
+
+Last chance to not distroy the NVMe. Make sure there are no
+/dev/nvme entries in this file.
+
+Load the new partition table onto the SD card:
+
+	sfdisk /dev/sdl < sdl_table.txt
+
+sturner@ugreen:~# sfdisk /dev/sdl < sdl_table.txt 
+Checking that no-one is using this disk right now ... OK
+
+Disk /dev/sdl: 119.21 GiB, 127999672320 bytes, 249999360 sectors
+Disk model: MassStorageClass
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: gpt
+Disk identifier: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA00
+
+Old situation:
+
+Device        Start       End   Sectors  Size Type
+/dev/sdl1       512    524799    524288  256M Linux filesystem
+/dev/sdl2    524800   4719103   4194304    2G Linux filesystem
+/dev/sdl3   4719104 249999325 245280222  117G Linux filesystem
+/dev/sdl128      34       511       478  239K BIOS boot
+
+Partition table entries are not in disk order.
+
+>>> Script header accepted.
+>>> Script header accepted.
+>>> Script header accepted.
+>>> Script header accepted.
+>>> Script header accepted.
+>>> Script header accepted.
+>>> Script header accepted.
+>>> Created a new GPT disklabel (GUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA00).
+/dev/sdl1: Created a new partition 1 of type 'Linux filesystem' and of size 256 MiB.
+/dev/sdl2: Created a new partition 2 of type 'Linux filesystem' and of size 2 GiB.
+/dev/sdl3: Created a new partition 3 of type 'Linux filesystem' and of size 117 GiB.
+/dev/sdl4: Created a new partition 128 of type 'BIOS boot' and of size 239 KiB.
+/dev/sdl129: Done.
+
+New situation:
+Disklabel type: gpt
+Disk identifier: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA00
+
+Device        Start       End   Sectors  Size Type
+/dev/sdl1       512    524799    524288  256M Linux filesystem
+/dev/sdl2    524800   4719103   4194304    2G Linux filesystem
+/dev/sdl3   4719104 249999325 245280222  117G Linux filesystem
+/dev/sdl128      34       511       478  239K BIOS boot
+
+Partition table entries are not in disk order.
+
+The partition table has been altered.
+Calling ioctl() to re-read partition table.
+Syncing disks.
+
+Now partition 3 has 117GB for the Debian bookworm root file system.
+
+Copy the split GRUB partition 128 directory to the SD card:
+
+	ddrescue -f /dev/nvme2n1p128 /dev/sdl128
+
+sturner@ugreen:~# ddrescue -f /dev/nvme2n1p128 /dev/sdl128
+GNU ddrescue 1.27
+Press Ctrl-C to interrupt
+     ipos:   196608 B, non-trimmed:        0 B,  current rate:    244 kB/s
+     opos:   196608 B, non-scraped:        0 B,  average rate:    244 kB/s
+non-tried:        0 B,  bad-sector:        0 B,    error rate:       0 B/s
+  rescued:   244736 B,   bad areas:        0,        run time:          0s
+pct rescued:  100.00%, read errors:        0,  remaining time:         n/a
+                              time since last successful read:         n/a
+Copying non-tried blocks... Pass 1 (forwards)
+Finished                                    
+
+Create a vfat file system on partition 1 with label "kernel" the label
+is not critical:
+
+	mkfs.vfat -F16 -n kernel /dev/sdl1
+
+sturner@ugreen:~# mkfs.vfat -F16 -n kernel /dev/sdl1
+mkfs.fat 4.2 (2021-01-31)
+mkfs.fat: Warning: lowercase labels might not work properly on some systems
+
+To view the layout:
+
+	lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT /dev/sdl
+
+NAME     FSTYPE LABEL  UUID                                 PARTUUID                             MOUNTPOINT
+sdl                                                                                              
+├─sdl1   vfat   kernel C89D-D357                            xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa01 
+├─sdl2                                                      xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa02 
+├─sdl3                                                      xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx0f4 
+└─sdl128                                                    xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa80 
+
+NOTE:
+In order to boot the PARTUUID of partition 128 must be the same as the PARTUUID of the NVME p128.
+In order to boot the PARTUUID of partition 1   must be the same as the PARTUUID of the NVME p1.
+Since there are duplicate PARTUUID's we will use the unique UUID in the GRUB command line to
+select which filesystem to mount. Do not confuse UUID with PARTUUID
+
+I am going to change the UUID of partition to something easily recognizable. Not needed but shows
+how to change the UUID of vfat.
+
+	mlabel -N 12345678 -i /dev/sdl1
+
+sturner@ugreen:~# mlabel -N 12345678 -i /dev/sdl1
+Hidden (512) does not match sectors (63)
+
+To view the layout:
+
+	lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT /dev/sdl
+
+sturner@ugreen:~# lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT /dev/sdl
+NAME     FSTYPE LABEL UUID                                 PARTUUID                             MOUNTPOINT
+sdl                                                                                             
+├─sdl1   vfat         1234-5678                            xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa01 
+├─sdl2                                                     xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa02 
+├─sdl3                                                     xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx0f4 
+└─sdl128                                                   xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa80 
+
+The UUID is now 1234-5678 and not 12345678. Just take note of that for use later.
+
+Prepare partition 1.
+
+Mount the partition and copy the necessary boot files:
+
+	mkdir -p /a
+	mount /dev/sdl /a
+	mkdir -p /a/EFI/debian
+	mkdir -p /a/boot
+	cp /boot/EFI/debian/grub.cfg /a/EFI/debian
+	cp /boot/initrd2.img /a/boot
+	cp /boot/vmlinuz2 /a/boot
+	umount /a
+	(oops, forgot the rest of the files in /EFI/debian)
+Reboot... BIOS screen appeared.
+
+The rest of the notes are unfinished as in testing
+I found I have booted to the AMI BIOS.
+
+I was going to show how to use kexec to boot UGreen's
+kernel, disable the watchdog timer, then kexec Bookworm's
+kernel and run Debian Bookworm on the UGreen NAS but now
+that is not needed. Just go into the BIOS and turn off
+the watchdog. You now have a regular PC.
+
