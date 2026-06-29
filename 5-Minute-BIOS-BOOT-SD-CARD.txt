@@ -1,0 +1,63 @@
+UGreen Model DXP4800 Plus
+5 minute procedure to make a SD card 
+that will boot into the AMI BIOS
+
+I am using a real 32GB Raspberry Pi SD card.
+I could not find any smaller SD cards.
+
+Identify the SD card device and boot NVMe device:
+
+	lsblk -f
+
+Assuming the SD card device is /dev/sdl
+and the boot NVMe device is /dev/nvme2n1
+
+Erase all available signatures from the SD card:
+
+	wipefs -a /dev/sdl
+
+Create a new gpt partition table:
+
+	parted /dev/sdl mklabel gpt
+
+Get the partition table from the boot NVMe and
+change the device from nvme2n1 to sdl:
+
+	sfdisk -d /dev/nvme2n1 | sed 's/nvme2n1/sdl/' > table.txt
+
+Get the number of sectors on the SD card:
+
+fdisk -l /dev/sdl | head -1 | awk '{print $7}'
+
+Subtract 34 from this number.
+
+Edit table.txt and change:
+
+	last-lba: xxxxxxxx to have this new number.
+
+Delete /dev/sdlp2, /dev/sdlp3, /dev/sdlp4, /dev/sdlp5
+       /dev/sdlp6, /dev/sdlp7
+
+Load the partition table onto the SD card:
+
+	sfdisk /dev/sdl < table.txt
+
+Copy partition 128 and 1 of the NVMe to the SD card:
+
+	ddrescue -f /dev/nvme2n1p128 /dev/sdl128
+	ddrescue -f /dev/nvme2n1p1   /dev/sdl1
+
+Mount the SD card:
+
+	mount /dev/sdl1 /mnt
+
+Delete all files in /mnt/EFI/debian except grub.cfg
+
+Unmount the SD card:
+
+	cd /
+	umount /mnt
+
+Now put the card in and reboot when you need to access
+the AMI BIOS.
+
