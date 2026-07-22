@@ -1,0 +1,335 @@
+UGreen Model DXP4800 Plus
+This shows one way to manually create partitions on a SD card.
+
+Identify the SD card device and the boot NVMe:
+
+	lsblk -f
+
+We will assume the SD card device is /dev/sdl and 
+the NVMe device is /dev/nvme2n1
+
+Erase all available signatures from the SD card:
+
+	wipefs -a /dev/sdl
+
+The SD card can be larger or smaller than the NVMe.
+Use fdisk to find how many sectors are on this device:
+
+	fdisk -l /dev/sdl
+
+Look for 'xxxxxxxxx sectors' from the output.
+NOTE: The actual available sectors is 34 less, 
+due to the unusable first few sectors.
+If it reports "122204160 sectors" then the number
+we need is "122204126"
+Save this information for later.
+
+Get the partition table information from our boot NVMe:
+
+	sfdisk -d /dev/nvme2n1 > nvme2n1_table.txt
+
+Example:
+
+label: gpt
+label-id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA00
+device: /dev/nvme2n1
+unit: sectors
+first-lba: 34
+last-lba: 250069646
+sector-size: 512
+
+/dev/nvme2n1p1   : start=         512, size=      524288, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA01, attrs="LegacyBIOSBootable"
+/dev/nvme2n1p2   : start=      524800, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA02
+/dev/nvme2n1p3   : start=     4720640, size=       20480, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx0F4
+/dev/nvme2n1p4   : start=     4741120, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx041
+/dev/nvme2n1p5   : start=     8935424, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx050
+/dev/nvme2n1p6   : start=    13129728, size=     8388608, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA52
+/dev/nvme2n1p7   : start=    21518336, size=   228551311, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx9DA
+/dev/nvme2n1p128 : start=          34, size=         478, type=21686148-6449-6E6F-744E-656564454649, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA80
+
+The table is list in alphabetical order, not table order.
+Notice that the first partition (p128) starts at sector 34.
+The reserve area start at 0 and spans to sector 33.
+
+Save this file if you ever want to create a backup NVMe.
+Copy this file to a working SD card file:
+
+	cp nvme2n1_table.txt sd_table.txt
+
+Edit all lines that contain the NVMe device to be your SD card device.
+All /dev/nvme2n1 will become /dev/sdl Make sure you change ALL the 
+nvme2n1 entries. We don't want to destroy or boot NVMe by accident.
+We will use this file to create a new partition table on the SD card
+with matching PARTUUID's so grub will boot the SD card.
+Change the line 'last-lba: xxxxxxxxx' to be what was reported by fdisk minus 34.
+
+The first physical partition is p128 (/dev/sdlp128) and this is the split-grub partitions. Leave that
+alone. The second physical partition is p1 (/dev/sdlp1) and this is the vfat boot partition. Leave 
+that alone as well. Partitions p2-p7 can be resized or deleted. You must change the uuid=.
+A clarification: The "uuid" used by sfdisk is actually "PARTUUID"; they just use the term "uuid"
+because this is a partition program and the "PARTUUID" is implied. To generate unique uuid's run:
+
+	uuidgen
+
+Replace p2-p7 uuid= with unique id's. Don't touch p128 nor p1 or it will not boot.
+
+Just to be clear, UGreen's grub program will only recognize a matching PARTUUID for
+partition 1 and 128. If the SD card's PARTUUID for partition 1 and 128 don't match the
+NVMe's PARTUUID, the SD card will not be recognized as bootable. Obviously this makes 
+duplicate PARTUUID's. To make sure the SD card will boot, we change grub.cfg so it 
+selects the unique UUID and not the duplicate PARTUUID that we are forced to use.
+UGreen's grub examines PARTUUID and says valid boot device. Initramfs will see UUID as
+a unique device, mount and boot it.
+
+
+In this example we are going to use a 64G SD card. The NVMe is 128G. Keeping p128 and p1, 
+the p2 partition will be 2G swap, p3 will be a new Debian Linux install, and p4 will be
+a sacrificial 12G root partition for booting. We will absorb this partition into p3 after
+the new OS is installed. My new sd_table.txt is:
+
+label: gpt 
+label-id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA00
+device: /dev/sdl
+unit: sectors
+first-lba: 34
+last-lba: 122204126
+sector-size: 512 
+
+/dev/sdlp1   : start=         512, size=      524288, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA01, attrs="LegacyBIOSBootable"
+/dev/sdlp2   : start=      524800, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx83f
+/dev/sdlp3   : start=     4719104, size=    92319198, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxca8
+/dev/sdlp4   : start=    97038302, size=    25165824, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx535
+/dev/sdlp128 : start=          34, size=         478, type=21686148-6449-6E6F-744E-656564454649, uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxA80
+
+Just a quick math check:
+Reserved start=0        + Reserved size=34       = 34
+    p128 start=34       +     p128 size=478      = 512
+      p1 start=512      +       p1 size=524288   = 524800
+      p2 start=524800   +       p2 size=4194304  = 4719104
+      p3 start=4719104  +       p3 size=92319198 = 97038302
+      p4 start=97038302 +       p4 size=25165824 = 122204126
+      last-lba=122204126
+
+Load the new partition table onto the SD card:
+
+	sfdisk /dev/sdl < sd_table.txt
+
+To view the layout:
+
+	lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT
+
+Copy the split-grub partition directly to the SD card:
+
+	ddrescue -f /dev/nvme2n1p128 /dev/sdl128
+	ddrescue -f /dev/nvme2n1p1 /dev/sdl1
+
+Or better, save a copy for backup:
+
+	ddrescue -f -n /dev/nvme2n1p128 nvme2n1p128.img nvme2n1p128.map
+	ddrescue -f -n /dev/nvme2n1p1   nvme2n1p1.img   nvme2n1p1.map
+	ddrescue -f nvme2n1p128.img /dev/sdl128
+	ddrescue -f nvme2n1p1.img /dev/sdl1
+
+Adjust the filesystem UUID on partition 1 (not PARTUUID) to be unique:
+
+	mlabel -N 12345678 -i /dev/sdl1
+
+Since this is a vfat partition, the UUID is now 1234-5678 and not 12345678
+This UUID=1234-5678 will be added to grub.cfg to guarantee SD card boot.
+
+To view the layout:
+
+	lsblk -o NAME,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINT
+
+The PARTUUID for partition 1 and 128 of the SD card must match the NVMe.
+The UUID for partition 1 must be unique to guarantee SD card boot.
+
+Create the swap file:
+
+	mkswap -L sdswap /dev/sdl2
+
+A unique swap identifier 'sdswap' is helpful to see if the system loaded
+the SD card swap or the NVMe swap partition.
+
+Create the future root filesystem:
+
+	mkfs.ext4 -L "Bookworm" /dev/sdl3
+
+Create the boot root filesystem:
+
+	mkfs.ext4 -L "UGOS" /dev/sdl4
+
+Copy running boot NVMe root filesystem to file:
+
+	ddrescue -f -n /dev/nvme2n1p7   nvme2n1p7.img nvme2n1p7.map
+
+Since this is a live filesystem, there will be some corruptions and
+the filesystem will be marked as dirty. We will fix that later.
+
+Now you have a backup of the root filesystem. Copy the image
+to the SD card "IF" the SD card partition is larger than the source:
+
+	ddrescue -f nvme2n1p7.img /dev/sdl4
+
+Now repair the filesystem and do some directory maintenance:
+
+	fsck -fvD /dev/sdl4
+
+In this case the source (~107G) is too large to fit on the
+SD partition 4 (~12G). But the actual data is only 9G.
+ddrescue copies everything, even the unused space. So we will
+use rsync to copy the actual data. Mount the filesystem:
+
+	mount /dev/sdl4 /mnt
+
+My filesystem has been converted from an overlay filesystem
+to a flat filesystem. This will not work with an overlay
+filesystem as upperlayer whiteout's will be empty files.
+
+Use rsync to copy root to /mnt:
+(add "--dry-run" to see what will happen but not write files)
+
+	rsync -aAHvh --one-file-system --no-xattrs --no-acls --mkpath --progress \
+--exclude={"/dev/*","/lost+found/*","/media/*","/mnt/*","/proc/*","/run/*","/srv/*"} \
+--exclude={"/sys/*","/tmp/*","/var/cache/*","/var/lock/*""/var/run/*","/var/tmp/*"} \
+--exclude={"/home/*","/volume1/*"} \
+/ /mnt
+
+Unmount the filesystem:
+
+	umount /dev/sdl4
+
+Since we copied a live system, we need to fsck the SD card:
+
+	fsck -fvD /dev/sdl4
+
+In order to boot, we need to modify grub.cfg with the new UUID
+information. Mount the vfat partition:
+
+	mount /dev/sdl1 /mnt
+
+We need to edit /mnt/EFI/debian/grub.cfg
+Here is a default grub.cfg:
+
+set default="0"
+set timeout="10"
+
+menuentry "UGOS" {
+	linux /boot/vmlinuz2 root=PARTUUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa01 rootwait console=tty0 overlay=/dev/mmcblk0p7 overlayfs=ext4 net.ifnames=0 biosdevname=0
+	initrd /boot/initrd2.img
+}
+
+Add a new entry that changes the root= entry and initrd2.img to be initrd3.img
+Change root=PARTUUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa01 to be:
+
+	root=UUID=1234-5678
+
+It should look like:
+
+set default="0"
+set timeout="10"
+
+menuentry "UGOS" {
+	linux /boot/vmlinuz2 root=PARTUUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxa01 rootwait console=tty0 overlay=/dev/mmcblk0p7 overlayfs=ext4 net.ifnames=0 biosdevname=0
+	initrd /boot/initrd2.img
+}
+
+menuentry "SD-CARD" {
+	linux /boot/vmlinuz2 root=UUID=1234-5678 rootwait console=tty0 overlay=/dev/mmcblk0p7 overlayfs=ext4 net.ifnames=0 biosdevname=0
+	initrd /boot/initrd3.img
+}
+
+This entry changed 3 thing, it added a new menu entry, it changed the root= entry, and the /boot/initrd3.img
+The /boot/initrd2.img will work for "UGOS" entry but not when the boot partition is not number 7.
+/boot/initrd2.img expects to find root at partition 7. We need to modify initramfs to select
+partition 4 instead.
+
+Copy /mnt/boot/initrd2.img to a work area:
+
+	cp /mnt/boot/initrd2.img /src/initramfs
+
+Make an extraction directory and cd to it:
+
+	mkdir initrd3
+	cd initrd3
+
+Extract the initrd2.img file:
+
+	zstdcat /src/initramfs/initrd2.img | cpio -idmv
+
+Edit 'init'. Find the line:      "mount -t ext4 -o rw,noatime,stripe=256 ${BLK_DEV}7 /root"
+And change it to be partition 4: "mount -t ext4 -o rw,noatime,stripe=256 ${BLK_DEV}4 /root"
+
+Stay in the initrd3 directory.
+Lets create initrd3 archive:
+
+	find . -print0 | cpio -H newc --null -o > ../initrd3.cpio
+
+Now move up a directory and create the image file:
+
+	cd ..
+	zstd -18 initrd3.cpio -o initrd3.img
+
+Copy this new image to /mnt/boot:
+
+	cp initrd3.img /mnt/boot
+
+Unmount the SD card:
+
+	umount /mnt
+
+Mount the boot partition number 4 and edit the /etc/fstab to
+reflect the changes to the UUID of swap:
+
+	mount /dev/sdl4 /mnt
+	UUID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx10f"  none swap sw  0 0
+	umount /mnt
+	
+
+Now we can boot the SD card and start the Linux install on
+partition 3 (a debootstrap procedure). Once the install is complete 
+we will boots off of partition number 3. Once successful, we can 
+absorb the area of partition number 4 into partition number 3.
+
+Update:
+Debian Bookworm boots after adding drivers to modprobe but you only
+have 2 minutes before reboot. The AMI BIOS has a watchdog timer set
+that only the UGreen kernel with its custom drivers can turn off.
+The AMI BIOS is locked out, only UGreen kernel can turn off. 
+Moving on to compiling UGreen's kernel modules.
+
+No success, Bookworm reboots in 2 minutes. Moving on to kexec
+
+Success. Boot UGreen's kernel with an edited initramfs init script.
+Before the file systems are mounted, but after the modules are loaded
+we run the "Magic Close"
+
+load_modules
+[ "$quiet" != "y" ] && log_end_msg
+
+######################################################
+# Stop the Watchdog with Magic Close
+echo 'V' > /dev/watchdog
+sleep 1
+# Load the new kernel
+kexec -l /vmlinuz-6.12.90+deb12.1-amd64 \
+--initrd=/initrd.img-6.12.90+deb12.1-amd64 \
+--command-line="root=UUID=47440df2-1ba8-48ee-8d48-818b79c77dd9 rootwait console=tty0 loglevel=7"
+sync
+# Once more for good measure
+echo 'V' > /dev/watchdog
+sleep 1
+# Switch kernels
+kexec -e
+
+# Nothing below here should ever run 
+/bin/sh
+/bin/sh
+#
+######################################################
+
+starttime="$(_uptime)"
+
+Works. kexec to Bookworm is solid and running.
+We now have NFSv4 available.
+
