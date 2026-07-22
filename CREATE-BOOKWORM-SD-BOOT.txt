@@ -1,0 +1,317 @@
+UGreen Model DXP4800 Plus
+How to install and boot Debian Bookworm Linux on a UGreen
+NAS with an unlocked AMI BIOS
+
+Requirements: SD card that unlocks AMI BIOS,
+	USB-C SD card reader that is plugged into the USB-C
+	port to the right of the built-in SD card port,
+	Blank SD card to hold the new operating system
+
+I am using a "UGREEN Revodok" CM885 9-in-1 USB-C Hub
+75028 USB-C dongle that has Ethernet, HDMI, USB-B, 
+and SD card slot.
+
+Spoiler Alert: In order for Debian bookworm to use the
+RAID volume, the RAID will need to be destroyed
+and re-created. This is not necessary to just create
+a bootable SD card but worth considering.
+Backup everything.
+
+You can still proceed, just don't touch the RAID array
+until you want to commit. You can boot this SD card and
+run Debian Bookworm but it won't have access to the array.
+UGreen modified the ext4 file system with kernel modules that
+provide "special" ACL lists. Bookworm won't even recognize 
+the array as a file system if you try to mount it.
+
+You should do all testing from a boot SD card. Create a
+working mirror of the NVMe and boot the SD card. Don't
+risk bricking your factory NVMe. Using apt to install 
+packages runs the risk of pulling in incompatible libraries 
+that overwrite libraries that UGreen depends on to run.
+
+Use a USB SD card reader plugged into the NAS or put the SD
+card into a different system and mount the SD card so the
+NAS has access to it. I have a USB card reader plugged in and
+I booted from my clone SD card.
+
+This is the recommended procedure to install Debian Bookworm
+onto an SD Card using debootstrap.
+
+If the card is local, find it by running:
+
+	lsblk -f
+
+In this example, the SD card shows up as /dev/sdl
+
+We will use an easy tool 'cfdisk' to partition the SD card:
+
+	cfdisk /dev/sdl
+
+Create a new 300-550MB partition of type "EFI System"
+Create a new 2G swap partition (optional)
+Create a Linux file system on the rest of the space.
+
+Format the partitions:
+
+	mkfs.fat -F32 /dev/sdl1
+	mkswap --label sdswap /dev/sdl2 (if you created it)
+	mkfs.ext4 /dev/sdl2 (if you don't have swap partition)
+	mkfs.ext4 /dev/sdl3 (if you do    have swap partition)
+
+Optional, but nice to identify the SD card, label the
+partition using e2label:
+
+	e2label /dev/sdl3 "Bookworm"
+
+I am going to assume we have swap. Mount the SD card:
+
+	mount /dev/sdl3 /mnt
+	mkdir -p /mnt/boot/efi
+	mount /dev/sdl1 /mnt/boot/efi
+
+Run debootstrap to install a minimal Bookworm system directly 
+onto the SD card:
+
+	debootstrap bookworm /mnt https://deb.debian.org/debian/
+
+This is going to take some time to install all the base system
+packages.
+
+Copy all the necessary files from our NAS to the new
+Bookworm system:
+
+	cp /etc/hostname               /mnt/etc
+	cp /etc/hosts                  /mnt/etc
+	cp /etc/networks               /mnt/etc
+	cp /etc/shells                 /mnt/etc
+	cp /etc/fstab                  /mnt/etc
+	cp /etc/timezone               /mnt/etc
+	cp /etc/resolv.conf            /mnt/etc
+	cp /etc/apt/sources.list       /mnt/etc/apt
+	cp /etc/network/interfaces.d/* /mnt/etc/network/interfaces.d
+
+Your requirements will vary. At the very least run
+'passwd' to set the root password so you can login.
+
+This is what I am using for /etc/apt/sources.list:
+
+deb https://deb.debian.org/debian/ bookworm contrib main non-free non-free-firmware
+deb-src https://deb.debian.org/debian/ bookworm contrib main non-free non-free-firmware
+deb https://deb.debian.org/debian/ bookworm-updates contrib main non-free non-free-firmware
+deb-src https://deb.debian.org/debian/ bookworm-updates contrib main non-free non-free-firmware
+deb https://deb.debian.org/debian/ bookworm-proposed-updates contrib main non-free non-free-firmware
+deb-src https://deb.debian.org/debian/ bookworm-proposed-updates contrib main non-free non-free-firmware
+deb https://deb.debian.org/debian/ bookworm-backports contrib main non-free non-free-firmware
+deb-src https://deb.debian.org/debian/ bookworm-backports contrib main non-free non-free-firmware
+deb https://deb.debian.org/debian-security/ bookworm-security contrib main non-free non-free-firmware
+deb-src https://deb.debian.org/debian-security/ bookworm-security contrib main non-free non-free-firmware
+
+The rest will be performed in a chroot environment.
+We will create a chroot environment and then chroot into it and
+finish the install.
+
+First bind-mount the system directories in the new Bookworm root:
+
+	mount --bind /dev     /mnt/dev
+	mount --bind /dev/pts /mnt/dev/pts
+	mount --bind /sys     /mnt/sys
+	mount --bind /proc    /mnt/proc
+	mount --bind /run     /mnt/run
+
+Now, chroot into the new Bookworm root:
+
+	chroot /mnt /bin/bash
+
+Ignore the setlocale warnings.
+
+If you are using a windowing system, don't mix up which window
+is the chroot window and which ones are regular windows.
+If you ever get confused, run 'df'. You will see only four
+entries: / /boot/efi /dev /run This is the chroot shell.
+
+Configure the new system.
+
+We copied the fstab entry but UGreen's fstab does not have a / (root)
+entry. They use a BIOS setting. We need to edit /etc/fstab from within
+the chroot environment and add a root entry. To find the UUID's of the
+SD card, run blkid:
+
+	blkid | grep sdl
+
+Put that UUID's in /etc/fstab and update the the other mounts:
+
+# <file system> <mount point> <type> <options> <dump> <pass>
+tmpfs                                        /tmp tmpfs defaults,noatime,mode=1777 0 0
+UUID="1279422d-e48e-4f1b-98c4-f7b25a23f126"  / ext4 defaults,noatime 0 1
+UUID="A1E4-BA62"                             /boot vfat defaults 0 0
+UUID="7729d1ab-8f13-41bc-b770-28f1b91df1c5"  none swap sw 0 0
+
+We have a base operating system installed but no kernel.
+Install the kernel:
+
+	apt install linux-image-amd64
+
+This will take a while.
+
+I recommend changing "MODULES=most" to "MODULES=dep" in
+/etc/initramfs-tools/initramfs.conf to make the image file
+smaller.
+
+Install the firmware:
+
+	apt update
+	apt install firmware-linux-nonfree firmware-misc-nonfree
+
+Add any additional packages. This can be done later:
+
+	apt install bash-completion vim
+	apt install openssh-server nfs-common nfs-kernel-server samba
+	apt install chrony lm-sensors locales
+		followed by "dpkg-reconfigure locales"
+	apt install rsync
+
+Don't do it now, but later you will need mdadm and lvm2 to 
+assemble the array.
+
+Setup the network interfaces.
+UGreen uses the old systemd-networkd method.
+On your system, in /etc/network/interfaces.d are two files,
+ifcfg-eth0 and ifcfg-eth1. They use the old style
+configuration. We are going to change these to the new
+style "ifupdown" method. An example would help. My current
+ifcfg-eth0 file is:
+
+[Match]
+MACAddress=xx:xx:xx:xx:xx:f2
+
+[Network]
+Address=192.168.20.3/24
+DNS=192.168.10.20
+DNS=192.168.10.10
+
+You probably don't have the [Match] statement but I highly
+recommend it so the interfaces stay locked to that MAC
+address upon reboot enumeration. The real names are:
+
+eth0=enp6s0
+eth1=enp3s0
+
+Without locking a MAC address to an interface name, the 
+interface name can swap when you reboot.
+
+The new config file get translated into /etc/network/interfaces.d/enp6s0.cfg
+You must use the real names:
+
+auto enp6s0
+iface enp6s0 inet static
+    address 192.168.20.3
+    netmask 255.255.255.0
+    dns-nameservers 192.168.10.20 192.168.10.10
+    hwaddress ether xx:xx:xx:xx:xx:f2
+
+The same for enp3s0.cfg Just put in your local settings.
+Rename the two files we copied over to eth0.cfg and eth1.cfg in the chroot windows
+located in /etc/network/interfaces.d/
+To see your current settings, run 'ifconfig' in a non-chroot window
+
+My system uses the enp6s0 to talk to a private network
+therefore it does not have a default gateway. The enp3s0 interface
+does talk to the Internet therefore I added:
+
+	gateway 192.168.XXX.XXX
+
+UGreen's AMI BIOS is operating in UEFI mode.
+We need to install grub-efi-amd64
+
+	apt install grub-efi-amd64
+	grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=debian
+
+Since we are in a chroot environment, ignore the warning message.
+
+Let's be safe and add a fallback boot loader.
+This ensures the SD card boots even if the firmware does not create a NVRAM entry:
+
+	mkdir -p /boot/efi/EFI/BOOT
+	cp /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
+
+Update the grub.cfg menus:
+
+	update-grub
+
+Exit the chroot shell:
+
+	exit
+
+Unmount in the reverse order:
+
+	umount /mnt/run
+	umount /mnt/proc
+	umount /mnt/sys
+	umount /mnt/dev/pts
+	umount /mnt/dev
+	umount /mnt/boot/efi
+	umount /mnt
+
+A note on working with the NAS. Don't use 'shutdown',
+'poweroff', 'reboot'. Systemd runs parallel processes 
+to shutdown the system. Therefore the RAID and some
+disks never get properly unmounted. You should create a 
+script to shutdown the system after your run 'telinit 1'
+This will bring the system to single user mode. Run a 
+script to stop any program writing to the disk or holding 
+the disks active: "systemctl stop samba ..." Do "ps aux"
+and make sure all the producers are stopped. Now your 
+script should do a "sync" and unmount all NFS mounts and 
+external USB disks. Then unmount /home which is bind mounted 
+and then finally the array /volume1. Do a "sync" and then
+reboot or poweroff with "systemctl reboot" My disk scrubs
+went from several hours after a reboot to 2 minutes.
+
+BIOS Configuration
+
+Insert the SD card with the AMI BIOS unlock in the built-in 
+SD card slot. Now reboot into the SD card:
+
+	systemctl reboot
+
+The AMI BIOS will automatically come up. 
+
+If you have not done this already, navigate to "Advanced"
+"WatchDog Settings" and turn off the WatchDog.
+
+Navigate to the "Boot" tab and modify the 
+"Boot Option #1" #2, #3, etc. to be:
+
+Boot Option #1  [SD]
+Boot Option #2  [Hard Disk]
+Boot Option #3  [USB Hard Disk:UEFI: Generic MassStorageClass1539, Partition 1]
+Boot Option #4  [NVME:debian (XXXXXXXXXXX-XXX-X)]
+Boot Option #5  [CD/DVD]
+Boot Option #6  [USB CD/DVD]
+Boot Option #7  [USB Key]
+Boot Option #8  [USB Floppy]
+Boot Option #9  [USB Lan]
+Boot Option #10 [Network]
+
+One word of caution. Under the "Security" tab, never set 
+a BIOS password nor Secure Boot. If you do and the keyboard
+is locked out you have bricked the system at the BIOS level.
+
+Remove the unlock SD card. Insert the Bookworm SD card.
+The second SD card reader is no longer needed.
+
+Navigate to "Save & Exit" and select:
+
+	"Save Changes and Reset"
+
+The system will now boot the Bookworm SD card and display 
+the Bookworm GRUB menu. Bookworm will load and you can login 
+as root. Install your GUI of choice. I do recommend a rock
+solid GUI that won't crash and take down the server such as:
+
+	apt install openbox lightdm tint2 obconf
+	systemctl start lightdm
+
+Today is the first day of owning the hardware.
+
