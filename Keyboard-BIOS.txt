@@ -1,0 +1,8 @@
+The keyboard not working during boot appears to be caused by a problem
+with the USB 2.0 chip set. During BIOS initialization and GRUB startup,
+the keyboard is inaccessible. However, after initramfs, the keyboard
+does work. I noticed USB error messages in dmesg relating to EMI
+problems. It could be a faulty chip, grounding problems, or the
+chip set on the keyboard. I tried two different keyboards, as well
+as adding a powered hub, without success. I connected the keyboard
+to the rear USB 3.0 port and now the BIOS and GRUB are available.
